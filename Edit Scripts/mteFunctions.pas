@@ -51,6 +51,10 @@
   - [SetAuthor]: Sets the author of a file.
   - [FileByName]: gets a file from a filename.
   - [FileByAuthor]: gets a file from an author.
+  - [OverrideExistsIn]: returns whether or not an override exists for the specified 
+    record in the specified file.
+  - [WinningOverrideBefore]: returns the most winning override of a record in a 
+    file which has a load order less than the load order of the specified file.
   - [OverrideByFile]: gets the override for a particular record in a particular file,
     if it exists.
   - [OverrideRecordCount]: gets the number of override records in a file or record group.
@@ -99,6 +103,7 @@
   - [ExtractPathBSA]: extracts the contents of a BSA from a specified subpath to the 
     specified path.
   - [PrintBSAContents]: prints the contents of a BSA to xEdit's message log.
+  - [GetMasters]: adds masters from the specified file to the specified stringlist.
   - [AddMastersToList]: adds masters from the specified file (and the file itself) to 
     the specified stringlist.
   - [AddMastersToFile]: adds masters to the specified file from the specified stringlist.
@@ -1069,6 +1074,65 @@ begin
 end;
 
 {
+  OverrideExistsIn:
+  Returns whether or not an override for the specified record exists
+  in the specified file.
+  
+  Example usage:
+  f := FileByName('Update.esm');
+  e := MasterOrSelf(RecordByIndex(f, 1));
+  if OverrideExistsIn(e, f) then
+    AddMessage('Yay');
+}
+function OverrideExistsIn(e, f: IInterface): boolean;
+var
+  i: Integer;
+  ovr: IInterface;
+begin
+  Result := false;
+  e := MasterOrSelf(e);
+  for i := 0 to Pred(OverrideCount(e)) do begin
+    ovr := OverrideByIndex(e, i);
+    if Equals(GetFile(ovr), f) then begin
+      Result := true;
+      break;
+    end;
+  end;
+end;
+
+{
+  WinningOverrideBefore:
+  Returns the most winning override of a record, @e, in a file of lower
+  load order than @f.
+  
+  Example usage:
+  e := RecordByIndex(FileByName('Skyrim.esm'), 3401);
+  f := FileByName('Dragonborn.esm');
+  WinningOverrideBefore(e, f);
+}
+function WinningOverrideBefore(e, f: IInterface): IInterface;
+var
+  i, targetLoadOrder: Integer;
+  mst, ovr, ovrFile: IInterface;
+begin
+  Result := e;
+  mst := MasterOrSelf(e);
+  if OverrideCount(mst) = 0 then
+    exit;
+  
+  // find previous override
+  Result := mst;
+  targetLoadOrder := GetLoadOrder(f);
+  for i := 0 to Pred(OverrideCount(mst)) do begin
+    ovr := OverrideByIndex(mst, i);
+    ovrFile := GetFile(ovr);
+    if GetLoadOrder(ovrFile) >= targetLoadOrder then
+      break;
+    Result := ovr;
+  end;
+end;
+
+{
   OverrideByFile:
   
   Example usage:
@@ -1864,6 +1928,32 @@ begin
 end;
 
 {
+  GetMasters:
+  Adds the masters from a specific file to a specified stringlist.
+  
+  Example usage:
+  slMasters := TStringList.Create;
+  GetMasters(FileByName('Dragonborn.esm'), slMasters);
+  slMasters.Free;
+}
+procedure GetMasters(f: IInterface; var sl: TStringList);
+var
+  masters, master: IInterface;
+  i: integer;
+  s: string;
+begin  
+  masters := ElementByPath(ElementByIndex(f, 0), 'Master Files');
+  if not Assigned(masters) then exit;
+  
+  // loop through masters
+  for i := 0 to ElementCount(masters) - 1 do begin
+    master := ElementByIndex(masters, i);
+    s := GetElementEditValues(master, 'MAST');
+    if (sl.IndexOf(s) = -1) then sl.Add(s);
+  end;
+end;
+
+{
   AddMastersToList:
   Adds the masters from a specific file, and the file itself, to a 
   specified stringlist.
@@ -1871,6 +1961,7 @@ end;
   Example usage:
   slMasters := TStringList.Create;
   AddMastersToList(FileByName('Dragonborn.esm'), slMasters);
+  slMasters.Free;
 }
 procedure AddMastersToList(f: IInterface; var lst: TStringList);
 var
@@ -1916,7 +2007,7 @@ begin
   // AddMasterIfMissing will attempt to add the masters to the file.
   if not silent then AddMessage('    Adding masters to '+GetFileName(f)+'...');
   for i := 0 to lst.Count - 1 do begin
-    if (Lowercase(lst[i]) <> Lowercase(GetFileName(f))) then
+    if (Lowercase(lst[i]) <> Lowercase(GetFileName(f))) and (not StrEndsWith(Lowercase(lst[i]), '.dat')) and (not StrEndsWith(Lowercase(lst[i]), '.exe')) then
       AddMasterIfMissing(f, lst[i]);
   end;
   
@@ -1927,7 +2018,7 @@ begin
   // in the current TES5Edit session.
   masters := ElementByPath(ElementByIndex(f, 0), 'Master Files');
   if not Assigned(masters) then begin
-    Add(ElementByIndex(f, 0), 'Master Files');
+    Add(f, ElementByIndex(f, 0), 'Master Files');
     masters := ElementByPath(ElementByIndex(f, 0), 'Master Files');
   end;
   for i := 0 to ElementCount(masters) - 1 do begin
@@ -1935,7 +2026,7 @@ begin
     slCurrentMasters.Add(s);
   end;
   for i := 0 to lst.Count - 1 do begin
-    if (Lowercase(lst[i]) <> Lowercase(GetFileName(f))) and (slCurrentMasters.IndexOf(lst[i]) = -1) then begin
+    if (Lowercase(lst[i]) <> Lowercase(GetFileName(f))) and (slCurrentMasters.IndexOf(lst[i]) = -1) and (not StrEndsWith(Lowercase(lst[i]), '.dat')) and (not StrEndsWith(Lowercase(lst[i]), '.exe')) then begin
       master := ElementAssign(masters, HighInteger, nil, False);
       SetElementEditValues(master, 'MAST', lst[i]);
       AddMessage('      +Re-added master: '+lst[i]);
@@ -2063,11 +2154,15 @@ end;
   
   Example usage:
   files := TStringList.Create;
-  MultiFileSelect(files, 'Select some files');
-  AddMesage(files.Text); // The files the user selected
-  files.Free;
+  try
+    bCanceled := not MultiFileSelect(files, 'Select some files');
+    if bCanceled then exit;
+    AddMesage(files.Text); // The files the user selected
+  finally
+    files.Free;
+  end;
 }
-procedure MultiFileSelect(var sl: TStringList; prompt: string);
+function MultiFileSelect(var sl: TStringList; prompt: string): Boolean;
 const
   spacing = 24;
 var
@@ -2080,6 +2175,7 @@ var
   i: Integer;
   f: IInterface;
 begin
+  Result := false;
   frm := TForm.Create(nil);
   try
     frm.Position := poScreenCenter;
@@ -2126,6 +2222,7 @@ begin
     sl.Clear;
     
     if frm.ShowModal = mrOk then begin
+      Result := true;
       for i := 0 to FileCount - 2 do begin
         f := FileByLoadOrder(i);
         if (cbArray[i].Checked) and (sl.IndexOf(GetFileName(f)) = -1) then
