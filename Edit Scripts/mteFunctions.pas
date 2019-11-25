@@ -173,14 +173,16 @@ var
   s := GetVersionString(wbVersionNumber);
   AddMessage(s); // xEdit version *.*.*
 }
+// Variation from Real Shelter, shortened for easier version comparison
 function GetVersionString(v: integer): string;
 begin
-  Result := Format('%sEdit version %d.%d.%d', [
-    wbAppName,
-    v shr 24,
-    v shr 16 and $FF,
-    v shr 8 and $FF
-  ]);
+    Result := Format('%d.%d.%d', [
+    //Result := Format('%sEdit version %d.%d.%d', [
+        //wbAppName,
+  	    Int(v) shr 24,
+  	    Int(v) shr 16 and $FF,
+  	    Int(v) shr 8 and $FF
+  	]);
 end;
 
 {
